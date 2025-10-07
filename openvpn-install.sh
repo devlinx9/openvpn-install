@@ -206,6 +206,7 @@ function revokeClient() {
     chown nobody:"$group_name" /etc/openvpn/server/crl.pem
     echo
     echo "$client revoked!"
+    userdel $client
   else
     echo
     echo "$client revocation aborted!"
@@ -217,17 +218,41 @@ function addNewClient() {
     echo "Provide a name for the client:"
     read -p "Name: " unsanitized_client
     client=$(sed 's/[^0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-]/_/g' <<< "$unsanitized_client")
-    while [[ -z "$client" || -e /etc/openvpn/server/easy-rsa/pki/issued/"$client".crt ]]; do
+    while [[ -z "$client" ]]; do
       echo "$client: invalid name."
       read -p "Name: " unsanitized_client
       client=$(sed 's/[^0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-]/_/g' <<< "$unsanitized_client")
     done
-    cd /etc/openvpn/server/easy-rsa/
-    ./easyrsa --batch --days=3650 build-client-full "$client" nopass
-    # Build the $client.ovpn file, stripping comments from easy-rsa in the process
-    grep -vh '^#' /etc/openvpn/server/client-common.txt /etc/openvpn/server/easy-rsa/pki/inline/private/"$client".inline > "$script_dir"/"$client".ovpn
+
+    # Verify user
+    if  id "$client" &>/dev/null || [ -e /etc/openvpn/server/easy-rsa/pki/issued/"$client".crt ]; then
+      echo "User '$client' already exists. Only password updating"
+    else
+      # Create user
+      sudo adduser --disabled-password --gecos "" "$client"
+      sudo usermod -s /usr/sbin/nologin "$client"
+      echo "✅ '$client' user created without SSH access"
+
+      cd /etc/openvpn/server/easy-rsa/
+      ./easyrsa --batch --days=3650 build-client-full "$client" nopass
+      # Build the $client.ovpn file, stripping comments from easy-rsa in the process
+      grep -vh '^#' /etc/openvpn/server/client-common.txt /etc/openvpn/server/easy-rsa/pki/inline/private/"$client".inline > "$script_dir"/"$client".ovpn
+      echo
+      echo "$client added. Configuration available in:" "$script_dir"/"$client.ovpn"
+
+      # Configure Google Authenticator only new user
+      echo
+      echo "📲 Configurando Google Authenticator para '$client'..."
+      sudo -u "$client" google-authenticator -t -d -f -r 3 -R 30 -W
+      echo "✅ Google Authenticator configurado para '$client'"
+    fi
+
+    # Generate password
+    PASSWORD=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
+    echo "$client:$PASSWORD" | sudo chpasswd
+
     echo
-    echo "$client added. Configuration available in:" "$script_dir"/"$client.ovpn"
+    echo -e "\e[32m🔐 Password for username: $client  password: $PASSWORD\e[0m"
 }
 
 # Detect Debian users running the script with "sh" instead of bash
@@ -392,7 +417,7 @@ if [[ ! -e /etc/openvpn/server/server.conf ]]; then
 
   case "$pass_auth" in
     y|"")
-    pass_auth="pam-devel pwgen"
+    pass_auth="libpam0g-dev pwgen"
     ;;
   default)
     pass_auth=""
@@ -408,12 +433,20 @@ if [[ ! -e /etc/openvpn/server/server.conf ]]; then
 
   case "$google_mfa" in
       y|"")
-      google_mfa="google-authenticator qrencode"
+      google_mfa="libpam-google-authenticator qrencode"
       ;;
     default)
       google_mfa=""
       ;;
     esac
+
+echo
+	echo "Enter a name for the first client:"
+	read -p "Name [client]: " unsanitized_client
+	# Allow a limited set of characters to avoid conflicts
+	client=$(sed 's/[^0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-]/_/g' <<< "$unsanitized_client")
+	[[ -z "$client" ]] && client="client"
+	echo
 
 	echo "OpenVPN installation is ready to begin."
 	# Install a firewall if firewalld or iptables are not already available
@@ -486,6 +519,7 @@ ssbzSibBsu/6iGtCOGEoXJf//////////wIBAg==
 	ln -s /etc/openvpn/server/dh.pem pki/dh.pem
 	# Create certificates and CRL
 	./easyrsa --batch --days=3650 build-server-full server nopass
+	./easyrsa --batch --days=3650 build-client-full "$client" nopass
 	./easyrsa --batch --days=3650 gen-crl
 	# Move the stuff we need
 	cp pki/ca.crt pki/private/ca.key pki/issued/server.crt pki/private/server.key pki/crl.pem /etc/openvpn/server
@@ -607,8 +641,12 @@ ignore-unknown-option block-outside-dns
 verb 3" > /etc/openvpn/server/client-common.txt
 	# Enable and start the OpenVPN service
 	systemctl enable --now openvpn-server@server.service
+	# Build the $client.ovpn file, stripping comments from easy-rsa in the process
+	grep -vh '^#' /etc/openvpn/server/client-common.txt /etc/openvpn/server/easy-rsa/pki/inline/private/"$client".inline > "$script_dir"/"$client".ovpn
+	echo
 	echo "Finished!"
 	echo
+	echo "The client configuration is available in:" "$script_dir"/"$client.ovpn"
 	echo "New clients can be added by running this script again."
 else
 	clear

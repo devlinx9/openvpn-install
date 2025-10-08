@@ -123,33 +123,33 @@ function installQuestions() {
   	fi
 
   	echo
-    read -p "Enable password Authentication? [y/N]: " pass_auth
+    read -p "Enable password Authentication? [Y/n]: " pass_auth
     until [[ "$pass_auth" =~ ^[yYnN]*$ ]]; do
       echo "$pass_auth: invalid selection."
-      read -p "Confirm password authentication? [y/N]: " pass_auth
+      read -p "Confirm password authentication? [Y/n]: " pass_auth
     done
 
     case "$pass_auth" in
-      y|"")
+      y|Y|"")
       pass_auth="libpam0g-dev pwgen"
       ;;
-    default)
+    default|N|n)
       pass_auth=""
       ;;
     esac
 
   	echo
-    read -p "Enable MFA (Google Authenticator)? [y/N]: " google_mfa
+    read -p "Enable MFA (Google Authenticator)? [Y/n]: " google_mfa
     until [[ "$google_mfa" =~ ^[yYnN]*$ ]]; do
       echo "$google_mfa: invalid selection."
-      read -p "Confirm enable MFA (Google Authenticator)? [y/N]: " google_mfa
+      read -p "Confirm enable MFA (Google Authenticator)? [Y/n]: " google_mfa
     done
 
     case "$google_mfa" in
-        y|"")
+        y|Y|"")
         google_mfa="libpam-google-authenticator qrencode"
         ;;
-      default)
+      default|N|n)
         google_mfa=""
         ;;
       esac
@@ -303,6 +303,8 @@ function deleteOpenVpn() {
     systemctl disable --now openvpn-server@server.service
     rm -f /etc/systemd/system/openvpn-server@server.service.d/disable-limitnproc.conf
     rm -f /etc/sysctl.d/99-openvpn-forward.conf
+    rm -f /etc/pam.d/openvpn
+    rm -f /etc/openvpn/server/client-common.txt
     if [[ "$os" = "debian" || "$os" = "ubuntu" ]]; then
       rm -rf /etc/openvpn/server
       apt-get remove --purge -y openvpn
@@ -389,11 +391,19 @@ function addNewClient() {
       echo
       echo "$client added. Configuration available in:" "$script_dir"/"$client.ovpn"
 
-      # Configure Google Authenticator only new user
-      echo
-      echo "📲 Configurando Google Authenticator para '$client'..."
-      sudo -u "$client" google-authenticator -t -d -f -r 3 -R 30 -W
-      echo "✅ Google Authenticator configurado para '$client'"
+
+      if grep -Eq '^[[:space:]]*auth[[:space:]]+requisite[[:space:]]+pam_google_authenticator\.so[[:space:]]+secret=/opt/openvpn/google-auth/\${USER}[[:space:]]+user=root[[:space:]]+forward_pass' /etc/pam.d/openvpn; then
+         # Configure Google Authenticator only new user
+         echo
+         echo "📲 Configurando Google Authenticator para '$client'..."
+         sudo -u "$client" google-authenticator -t -d -f -r 3 -R 30 -W
+         echo "✅ Google Authenticator configurado para '$client'"
+
+         sudo mkdir -p /opt/openvpn/google-auth
+         sudo mv /home/$client/.google_authenticator /opt/openvpn/google-auth/$client
+         sudo chown root:root /opt/openvpn/google-auth/$client
+         sudo chmod 600 /opt/openvpn/google-auth/$client
+      fi
     fi
 
     # Generate password
@@ -512,24 +522,31 @@ group $group_name
 persist-key
 persist-tun
 verb 3
-crl-verify crl.pem" >> /etc/openvpn/server/server.conf
+crl-verify crl.pem
+verify-client-cert require" >> /etc/openvpn/server/server.conf
     if [[ "$protocol" = "udp" ]]; then
       echo "explicit-exit-notify" >> /etc/openvpn/server/server.conf
     fi
-    if [[ $pass_auth = "libpam0g-dev pwgen" ]]; then
-          echo "
-plugin /usr/lib/openvpn/openvpn-plugin-auth-pam.so openvpn
-username-as-common-name
-verify-client-cert require
-" >> /etc/openvpn/server/server.conf
-    fi
     if [[ $google_mfa = "libpam-google-authenticator qrencode" ]]; then
-        echo "
-plugin /usr/lib/openvpn/openvpn-plugin-auth-pam.so openvpn
-username-as-common-name
-verify-client-cert require
-" >> /etc/openvpn/server/server.conf
+      mkdir -p /etc/pam.d
+      echo "auth requisite pam_google_authenticator.so secret=/opt/openvpn/google-auth/\${USER} user=root forward_pass" >> /etc/pam.d/openvpn
     fi
+    if [[ $pass_auth = "libpam0g-dev pwgen" ]]; then
+      mkdir -p /etc/pam.d
+      if [[ $google_mfa = "libpam-google-authenticator qrencode" ]]; then
+        echo "auth required pam_unix.so use_first_pass" >> /etc/pam.d/openvpn
+      else
+        echo "auth required pam_unix.so" >> /etc/pam.d/openvpn
+      fi
+
+    fi
+
+    if [[ $pass_auth = "libpam0g-dev pwgen" || $google_mfa = "libpam-google-authenticator qrencode" ]]; then
+      echo "account required pam_unix.so" >> /etc/pam.d/openvpn
+      echo "plugin /usr/lib/openvpn/openvpn-plugin-auth-pam.so openvpn
+username-as-common-name" >> /etc/openvpn/server/server.conf
+    fi
+
     # Enable net.ipv4.ip_forward for the system
     echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-openvpn-forward.conf
     # Enable without waiting for a reboot or service restart
@@ -617,9 +634,14 @@ remote-cert-tls server
 auth SHA512
 ignore-unknown-option block-outside-dns
 verb 3" > /etc/openvpn/server/client-common.txt
-    # Enable and start the OpenVPN service
-    systemctl enable --now openvpn-server@server.service
-    echo
+
+  if [[ $pass_auth = "libpam0g-dev pwgen" || $google_mfa = "libpam-google-authenticator qrencode" ]]; then
+    echo "auth-user-pass" >> /etc/openvpn/server/client-common.txt
+  fi
+
+  # Enable and start the OpenVPN service
+  systemctl enable --now openvpn-server@server.service
+  echo
 }
 
 # Detect Debian users running the script with "sh" instead of bash

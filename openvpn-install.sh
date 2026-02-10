@@ -7,6 +7,7 @@
 DHCP_OPENVPN="10.99.0.0"
 DHCP_OPENVPN_MASK="255.255.255.0"
 DHCP_OPENVPN_MASK2="24"
+GOOGLE_AUTH_LABEL_ISSUER="$HOSTNAME"
 
 function installQuestions() {
 
@@ -396,7 +397,7 @@ function addNewClient() {
          # Configure Google Authenticator only new user
          echo
          echo "📲 Configurando Google Authenticator para '$client'..."
-         sudo -u "$client" google-authenticator -t -d -f -r 3 -R 30 -W
+         sudo -u "$client" google-authenticator -t -d -f -r 3 -R 30 -w 1 -l "$client" -i "$GOOGLE_AUTH_LABEL_ISSUER"
          echo "✅ Google Authenticator configurado para '$client'"
 
          sudo mkdir -p /opt/openvpn/google-auth
@@ -523,7 +524,14 @@ persist-key
 persist-tun
 verb 3
 crl-verify crl.pem
-verify-client-cert require" >> /etc/openvpn/server/server.conf
+verify-client-cert require
+
+# use a Unix socket rather than TCP
+management /var/run/openvpn-mgmt.sock unix
+
+log-append /var/log/openvpn/openvpn.log
+status /var/log/openvpn/status.log
+" >> /etc/openvpn/server/server.conf
     if [[ "$protocol" = "udp" ]]; then
       echo "explicit-exit-notify" >> /etc/openvpn/server/server.conf
     fi

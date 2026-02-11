@@ -535,8 +535,8 @@ status /var/log/openvpn/status.log
 # Config for performance in windows and mac
 sndbuf 0
 rcvbuf 0
-push "sndbuf 393216"
-push "rcvbuf 393216"
+push \"sndbuf 393216\"
+push \"rcvbuf 393216\"
 tun-mtu 1500
 mssfix 1450
 " >> /etc/openvpn/server/server.conf

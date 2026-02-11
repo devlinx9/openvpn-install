@@ -531,6 +531,14 @@ management /var/run/openvpn-mgmt.sock unix
 
 log-append /var/log/openvpn/openvpn.log
 status /var/log/openvpn/status.log
+
+# Config for performance in windows and mac
+sndbuf 0
+rcvbuf 0
+push "sndbuf 393216"
+push "rcvbuf 393216"
+tun-mtu 1500
+mssfix 1450
 " >> /etc/openvpn/server/server.conf
     if [[ "$protocol" = "udp" ]]; then
       echo "explicit-exit-notify" >> /etc/openvpn/server/server.conf

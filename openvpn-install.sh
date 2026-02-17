@@ -517,7 +517,7 @@ tls-crypt tc.key
 topology subnet
 server $DHCP_OPENVPN $DHCP_OPENVPN_MASK" > /etc/openvpn/server/server.conf
     dnsConfig
-    echo "keepalive 10 120
+    echo "keepalive 10 60
 user nobody
 group $group_name
 persist-key
@@ -537,11 +537,19 @@ sndbuf 0
 rcvbuf 0
 push \"sndbuf 393216\"
 push \"rcvbuf 393216\"
-tun-mtu 1500
-mssfix 1450
+tun-mtu 1400
+mssfix 1360
+reneg-sec 43200
+
+data-ciphers AES-256-GCM:AES-128-GCM
+data-ciphers-fallback AES-256-GCM
+
+auth-gen-token 43200
+auth-gen-token-secret /etc/openvpn/auth-token.key
+auth-nocache
 " >> /etc/openvpn/server/server.conf
     if [[ "$protocol" = "udp" ]]; then
-      echo "explicit-exit-notify" >> /etc/openvpn/server/server.conf
+      echo "explicit-exit-notify 1" >> /etc/openvpn/server/server.conf
     fi
     if [[ $google_mfa = "libpam-google-authenticator qrencode" ]]; then
       mkdir -p /etc/pam.d
@@ -653,6 +661,8 @@ verb 3" > /etc/openvpn/server/client-common.txt
 
   if [[ $pass_auth = "libpam0g-dev pwgen" || $google_mfa = "libpam-google-authenticator qrencode" ]]; then
     echo "auth-user-pass" >> /etc/openvpn/server/client-common.txt
+    openvpn --genkey auth-token /etc/openvpn/auth-token.key
+    chmod 600 /etc/openvpn/auth-token.key
   fi
 
   # Enable and start the OpenVPN service
